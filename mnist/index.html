@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>Draw The Number</title>
+    <style>
+        body {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            background-color: #fff;
+            margin: 0;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            object-fit: contain;
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            border: 1px solid #000;
+
+        }
+    </style>
+</head>
+
+<body>
+    <canvas width="28" height="28"></canvas>
+    <div>
+        <button id="guess">Guess Number</button>
+        <button id="clear">Clear</button>
+        <button id="tint">Tint</button>
+
+    </div>
+    <p>Guessed: <span id="answer"></span></p>
+    <script>
+        const w = 28,
+            h = 28;
+
+        const canvas = document.querySelector("canvas")
+        const answer = document.querySelector("#answer")
+        const context = canvas.getContext("2d")
+        const imageData = context.createImageData(w, h);
+
+        function clamp(min, x, max) {
+            return Math.min(Math.max(x, min), max)
+        }
+
+        function extract_alpha(canvasData) {
+            let result = new Uint8Array(28 * 28)
+            j = 0;
+            for (let i = 3; i < canvasData.length; i += 4) {
+                result[j++] = canvasData[i]
+            }
+            return result
+        }
+
+        (async function start() {
+            const resp = await fetch("static/draw.wasm")
+            const moduleBytes = await resp.arrayBuffer()
+            const {
+                module,
+                instance
+            } = await WebAssembly.instantiate(moduleBytes)
+            const exports = instance.exports
+            const buffer = exports.mem.buffer
+
+            const canvasData = new Uint8Array(buffer, 0x10000, w * h * 4)
+            const input = new Uint8Array(exports.mem.buffer, 0x0000, 3);
+
+            function convertEventMouseLocation(event) {
+                const target = event.target
+                const cw = target.clientWidth,
+                    ch = target.clientHeight;
+                let size, ow, oh;
+                if (cw < ch) {
+                    size = cw;
+                    ow = 0;
+                    oh = (ch - cw) / 2;
+                } else {
+                    size = ch;
+                    ow = (cw - ch) / 2;
+                    oh = 0;
+                }
+                let offsetX = event.clientX - target.offsetLeft;
+                let offsetY = event.clientY - target.offsetTop;
+                return [
+                    clamp(0, w * (offsetX - ow) / size, w - 1),
+                    clamp(0, h * (offsetY - oh) / size, h - 1)
+                ]
+            }
+
+            function mouseEventHandler(event) {
+                let [x, y] = convertEventMouseLocation(event)
+                input[0] = x
+                input[1] = y
+                input[2] = event.buttons;
+            }
+
+            function clear() {
+                input[2] = 9 // clear screen signal
+            }
+
+            function tint() {
+                input[2] = 10
+            }
+
+            async function guess() {
+                let img = extract_alpha(canvasData)
+                let response = await fetch("/guess", {
+                    method: "POST",
+                    body: img
+                })
+                let resp = await response.json();
+                console.log(resp)
+                let number = resp["number"]
+                let confidence = resp["confidence"]
+
+                answer.textContent = `${number} (${confidence}) `;
+            }
+            canvas.addEventListener("mousemove", mouseEventHandler);
+            canvas.addEventListener("mousedown", mouseEventHandler);
+            canvas.addEventListener("mouseup", mouseEventHandler);
+            document.querySelector("button#clear").onclick = clear;
+            document.querySelector("button#guess").onclick = guess;
+            document.querySelector("button#tint").onclick = tint;
+
+            // TODO add touch support
+
+            (function update() {
+                requestAnimationFrame(update)
+                exports.run()
+                imageData.data.set(canvasData)
+                context.putImageData(imageData, 0, 0)
+            })();
+
+        })()
+    </script>
+</body>
+
+</html>
